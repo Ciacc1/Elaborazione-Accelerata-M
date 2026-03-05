@@ -164,6 +164,11 @@ PGMImage dftToImage(MyComplex *dft, int width, int height) {
         }
     }
 
+
+    //senza il seguente codice la differenza tra i valori della dft non sarebbe visibile,
+    // poiché la DFT può produrre valori molto grandi o molto piccoli, è necessario normalizzare e applicare un logaritmo
+
+
     // Normalizza e applica logaritmo per migliore contrasto
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {

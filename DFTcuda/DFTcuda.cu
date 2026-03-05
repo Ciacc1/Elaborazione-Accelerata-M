@@ -29,6 +29,16 @@ typedef struct {
     } \
 }
 
+// # esempio di immagine PGM 4x3
+// P5
+// 4[width] 3[height]
+// 255[max_value]
+// 0  50 100 150 [row 1]
+// 50 100 150 200 [row 2]
+// 100 150 200 255 [row 3]
+// con fscanf e fread si legge la parte testuale per i metadati
+// poi i dati binari in un array di unsigned char (1 byte per pixel)
+
 PGMImage readPGM(const char *filename) {
     PGMImage img;
     FILE *file = fopen(filename, "rb");
@@ -46,7 +56,7 @@ PGMImage readPGM(const char *filename) {
 
     fscanf(file, "%d %d", &img.width, &img.height);
     fscanf(file, "%d", &img.max_value);
-    fgetc(file);
+    fgetc(file); //scarta il newline dopo max_value
 
     img.data = (unsigned char *)malloc(img.width * img.height);
     fread(img.data, 1, img.width * img.height, file);
