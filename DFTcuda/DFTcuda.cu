@@ -154,10 +154,16 @@ __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     
 }
 
-int main() {
-    const char *inputFile = "./Bologna-512.pgm";
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        printf("Uso: %s <percorso_immagine.pgm> \n", argv[0]);
+        return 1;
+    }
+    const char *inputFile =argv[1];
     const char *outputFile = "output_cuda-512.pgm";
     float raggioFiltro = 260.0f; // 130 per 256 px    260 512 px
+
+    
 
     // --- CUDA events per timing ---
     cudaEvent_t start, stop;
