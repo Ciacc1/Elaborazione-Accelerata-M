@@ -77,6 +77,62 @@ void writePGM(const char *filename, PGMImage img) {
     fclose(file);
 }
 
+#define TILE_SIZE 16
+
+__global__ void dft2D_opt(unsigned char *in, MyComplex *out, int width, int height) {
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    // 1. Shared memory tile per ridurre accessi a global memory
+    __shared__ float tile[TILE_SIZE][TILE_SIZE];
+
+    float sumReal = 0.0f;
+    float sumImag = 0.0f;
+
+    // 2. Precalcola i fattori angolari di (x,y) fuori dal loop
+    float angleX = -2.0f * PI * (float)x / width;
+    float angleY = -2.0f * PI * (float)y / height;
+
+    for (int tileV = 0; tileV < height; tileV += TILE_SIZE) {
+        for (int tileU = 0; tileU < width; tileU += TILE_SIZE) {
+
+            // Carica un tile in shared memory collaborativamente
+            int u = tileU + threadIdx.x;
+            int v = tileV + threadIdx.y;
+
+            if (u < width && v < height)
+                tile[threadIdx.y][threadIdx.x] = (float)in[v * width + u];
+            else
+                tile[threadIdx.y][threadIdx.x] = 0.0f;
+
+            __syncthreads();
+
+            // 3. Itera sul tile in shared memory (molto più veloce)
+            if (x < width && y < height) {
+                for (int dv = 0; dv < TILE_SIZE && (tileV + dv) < height; dv++) {
+                    for (int du = 0; du < TILE_SIZE && (tileU + du) < width; du++) {
+
+                        float pixel = tile[dv][du];
+                        float angle = angleX * (tileU + du) + angleY * (tileV + dv);
+
+                        // 4. sincosf() calcola sin e cos in una sola istruzione HW
+                        float s, c;
+                        sincosf(angle, &s, &c);
+
+                        sumReal += pixel * c;
+                        sumImag += pixel * s;
+                    }
+                }
+            }
+
+            __syncthreads();
+        }
+    }
+
+    if (x < width && y < height)
+        out[y * width + x] = { sumReal, sumImag };
+}
 
 __global__ void dft2D(unsigned char *in, MyComplex *out, int width, int height) {
     
@@ -195,7 +251,7 @@ int main(int argc, char *argv[]) {
     // start timer
     cudaEventRecord(start);
 
-    dft2D<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
+    dft2D_opt<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
 
