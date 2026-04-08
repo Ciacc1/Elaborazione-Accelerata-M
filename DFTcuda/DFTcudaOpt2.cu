@@ -5,6 +5,7 @@
 
 
 #define PI 3.14159265358979323846
+#define TILE_SIZE 16
 
 typedef struct {
     double real;
@@ -260,7 +261,7 @@ int main(int argc, char *argv[]) {
     // start timer
     //cudaEventRecord(start);
 
-    dft2D_opt<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
+    dft2D_opt_shared<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
 
@@ -299,7 +300,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
 
-    idft2D<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
+    idft2D_opt_shared<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer

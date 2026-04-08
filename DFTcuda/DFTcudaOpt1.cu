@@ -256,7 +256,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
 
-    idft2D<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
+    idft2D_opt<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
