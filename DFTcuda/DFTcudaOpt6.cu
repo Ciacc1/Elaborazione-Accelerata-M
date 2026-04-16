@@ -7,7 +7,7 @@
 #define PI 3.14159265358979323846
 #define TILE_SIZE 16
 
-typedef struct {
+typedef __align__(8) struct {
     double real;
     double imag;
 } MyComplex;
@@ -83,7 +83,7 @@ void writePGM(const char *filename, PGMImage img) {
 #define TILE_SIZE 16
 #define PI 3.14159265358979323846f
 
-__global__ void dft2D_opt_shared(unsigned char *in, MyComplex *out, int width, int height) {
+__global__ void dft2D_opt_L1(const unsigned char* __restrict__ in, MyComplex* __restrict__ out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -143,7 +143,7 @@ __global__ void dft2D_opt_shared(unsigned char *in, MyComplex *out, int width, i
 }
 
 
-__global__ void idft2D_opt_shared(MyComplex *in, unsigned char *out, int width, int height) {
+__global__ void idft2D_opt_L1(const MyComplex* __restrict__ in, unsigned char* __restrict__ out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -269,7 +269,7 @@ int main(int argc, char *argv[]) {
     // start timer
     //cudaEventRecord(start);
 
-    dft2D_opt_shared<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
+    dft2D_opt_L1<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
 
@@ -308,7 +308,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
 
-    idft2D_opt_shared<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
+    idft2D_opt_L1<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
