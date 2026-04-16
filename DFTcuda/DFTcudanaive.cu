@@ -1,3 +1,4 @@
+@ -1,256 +1,262 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -77,62 +78,6 @@ void writePGM(const char *filename, PGMImage img) {
     fclose(file);
 }
 
-#define TILE_SIZE 16
-
-__global__ void dft2D_opt(unsigned char *in, MyComplex *out, int width, int height) {
-
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    // 1. Shared memory tile per ridurre accessi a global memory
-    __shared__ float tile[TILE_SIZE][TILE_SIZE];
-
-    float sumReal = 0.0f;
-    float sumImag = 0.0f;
-
-    // 2. Precalcola i fattori angolari di (x,y) fuori dal loop
-    float angleX = -2.0f * PI * (float)x / width;
-    float angleY = -2.0f * PI * (float)y / height;
-
-    for (int tileV = 0; tileV < height; tileV += TILE_SIZE) {
-        for (int tileU = 0; tileU < width; tileU += TILE_SIZE) {
-
-            // Carica un tile in shared memory collaborativamente
-            int u = tileU + threadIdx.x;
-            int v = tileV + threadIdx.y;
-
-            if (u < width && v < height)
-                tile[threadIdx.y][threadIdx.x] = (float)in[v * width + u];
-            else
-                tile[threadIdx.y][threadIdx.x] = 0.0f;
-
-            __syncthreads();
-
-            // 3. Itera sul tile in shared memory (molto più veloce)
-            if (x < width && y < height) {
-                for (int dv = 0; dv < TILE_SIZE && (tileV + dv) < height; dv++) {
-                    for (int du = 0; du < TILE_SIZE && (tileU + du) < width; du++) {
-
-                        float pixel = tile[dv][du];
-                        float angle = angleX * (tileU + du) + angleY * (tileV + dv);
-
-                        // 4. sincosf() calcola sin e cos in una sola istruzione HW
-                        float s, c;
-                        sincosf(angle, &s, &c);
-
-                        sumReal += pixel * c;
-                        sumImag += pixel * s;
-                    }
-                }
-            }
-
-            __syncthreads();
-        }
-    }
-
-    if (x < width && y < height)
-        out[y * width + x] = { sumReal, sumImag };
-}
 
 __global__ void dft2D(unsigned char *in, MyComplex *out, int width, int height) {
     
@@ -210,6 +155,8 @@ __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     
 }
 
+int main() {
+    const char *inputFile = "./Bologna-512.pgm";
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         printf("Uso: %s <percorso_immagine.pgm> \n", argv[0]);
@@ -220,7 +167,7 @@ int main(int argc, char *argv[]) {
     float raggioFiltro = 260.0f; // 130 per 256 px    260 512 px
 
     
-/*
+
     // --- CUDA events per timing ---
     cudaEvent_t start, stop;
     float ms = 0.0f;
@@ -228,7 +175,7 @@ int main(int argc, char *argv[]) {
     
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-*/
+
     PGMImage img = readPGM(inputFile);
 
     printf("Immagine caricata di dimensioni H:%d W:%d\n", img.height, img.width);
@@ -247,22 +194,22 @@ int main(int argc, char *argv[]) {
     //-------------------------------------- DFT
 
 
-  
+    
     // start timer
-    //cudaEventRecord(start);
+    cudaEventRecord(start);
 
     dft2D<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
 
     // stop timer
-    //cudaEventRecord(stop);
+    cudaEventRecord(stop);
 
     // attende fine kernel
-    //cudaEventSynchronize(stop);
+    cudaEventSynchronize(stop);
     // calcola tempo
-    //cudaEventElapsedTime(&ms, start, stop);
-    //printf("Tempo DFT: %f ms\n", ms);
+    cudaEventElapsedTime(&ms, start, stop);
+    printf("Tempo DFT: %f ms\n", ms);
 
     //-------------------------------------- 
 
@@ -270,36 +217,36 @@ int main(int argc, char *argv[]) {
 
 
     //reset timer
-    //cudaEventRecord(start);
+    cudaEventRecord(start);
    
     filtro<<<numBlocchi, threadsNum>>>(d_dft, img.width, img.height, raggioFiltro);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
-    //cudaEventRecord(stop);
+    cudaEventRecord(stop);
     // attende fine kernel
-    //cudaEventSynchronize(stop);
+    cudaEventSynchronize(stop);
     // calcola tempo
-    //cudaEventElapsedTime(&ms, start, stop);
-    //printf("Tempo filtro: %f ms\n", ms);   
+    cudaEventElapsedTime(&ms, start, stop);
+    printf("Tempo filtro: %f ms\n", ms);   
     
     //--------------------------------------
 
     //-------------------------------------- iDFT
 
     //reset timer
-    //cudaEventRecord(start);
+    cudaEventRecord(start);
 
     idft2D<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
-    //cudaEventRecord(stop);
+    cudaEventRecord(stop);
     // attende fine kernel
-    //cudaEventSynchronize(stop);
+    cudaEventSynchronize(stop);
     // calcola tempo
-    //cudaEventElapsedTime(&ms, start, stop);
-    //printf("Tempo iDFT: %f ms\n", ms);
+    cudaEventElapsedTime(&ms, start, stop);
+    printf("Tempo iDFT: %f ms\n", ms);
     //-------------------------------------- 
 
     cudaMemcpy(img.data, d_out, img.width * img.height, cudaMemcpyDeviceToHost);
