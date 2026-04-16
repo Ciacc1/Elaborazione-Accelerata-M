@@ -155,8 +155,6 @@ __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     
 }
 
-int main() {
-    const char *inputFile = "./Bologna-512.pgm";
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         printf("Uso: %s <percorso_immagine.pgm> \n", argv[0]);
