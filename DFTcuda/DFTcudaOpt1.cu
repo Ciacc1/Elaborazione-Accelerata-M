@@ -105,13 +105,16 @@ __global__ void dft2D_opt(unsigned char *in, MyComplex *out, int width, int heig
             float cosU, sinU;
             sincosf(angleX * u, &sinU, &cosU);
 
-            // Formula di addizione: cos(a+b), sin(a+b)
-            float c = cosU * cosV - sinU * sinV;
-            float s = sinU * cosV + cosU * sinV;
+            // Formula addizione — FMA esplicita
+            // cos(a+b) = cosU*cosV - sinU*sinV
+            float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+            // sin(a+b) = sinU*cosV + cosU*sinV
+            float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
 
             float pixel = (float)in[v * width + u];
-            sumReal += pixel * c;
-            sumImag += pixel * s;
+            // Accumulazione — FMA esplicita: sum = pixel*c + sumReal
+            sumReal = __fmaf_rn(pixel, c, sumReal);
+            sumImag = __fmaf_rn(pixel, s, sumImag);
         }
     }
 
@@ -141,14 +144,18 @@ __global__ void idft2D_opt(MyComplex *in, unsigned char *out, int width, int hei
             float cosU, sinU;
             sincosf(angleX * u, &sinU, &cosU);
 
-            // Formula di addizione
-            float c = cosU * cosV - sinU * sinV;
-            float s = sinU * cosV + cosU * sinV;
+            // Formula addizione con FMA
+            float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+            float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
 
             MyComplex coeff = in[v * width + u];
 
-            // IDFT: Re*cos - Im*sin
-            sum += coeff.real * c - coeff.imag * s;
+            // IDFT: real*c - imag*s + sum
+            // Decomposto in due FMA concatenate:
+            // step1 = __fmaf_rn(-imag, s, sum)   → -imag*s + sum
+            // step2 = __fmaf_rn( real, c, step1) →  real*c + (-imag*s + sum)
+            float step1 = __fmaf_rn(-coeff.imag, s, sum);
+            sum         = __fmaf_rn( coeff.real,  c, step1);
         }
     }
 

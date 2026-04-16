@@ -120,12 +120,15 @@ __global__ void dft2D_opt_shared(unsigned char *in, MyComplex *out, int width, i
                         float cosU, sinU;
                         sincosf(angleX * (tileU + du), &sinU, &cosU);
 
-                        // Formula di addizione
-                        float c = cosU * cosV - sinU * sinV;
-                        float s = sinU * cosV + cosU * sinV;
+                        // Formula addizione con FMA
+                        float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+                        float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
 
-                        sumReal += tile[dv][du] * c;
-                        sumImag += tile[dv][du] * s;
+                        float pixel = tile[dv][du];
+
+                        // Accumulazione con FMA
+                        sumReal = __fmaf_rn(pixel, c, sumReal);
+                        sumImag = __fmaf_rn(pixel, s, sumImag);
                     }
                 }
             }
@@ -182,10 +185,13 @@ __global__ void idft2D_opt_shared(MyComplex *in, unsigned char *out, int width, 
                         float cosU, sinU;
                         sincosf(angleX * (tileU + du), &sinU, &cosU);
 
-                        float c = cosU * cosV - sinU * sinV;
-                        float s = sinU * cosV + cosU * sinV;
+                       // Formula addizione con FMA
+                        float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+                        float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
 
-                        sum += tileReal[dv][du] * c - tileImag[dv][du] * s;
+                        // Accumulazione IDFT con due FMA concatenate
+                        float step1 = __fmaf_rn(-tileImag[dv][du], s, sum);
+                        sum         = __fmaf_rn( tileReal[dv][du],  c, step1);
                     }
                 }
             }
