@@ -79,7 +79,7 @@ void writePGM(const char *filename, PGMImage img) {
 
 #define TILE_SIZE 16
 
-__global__ void dft2D_opt(unsigned char *in, MyComplex *out, int width, int height) {
+__global__ void dft_opt(unsigned char *in, MyComplex *out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -121,7 +121,7 @@ __global__ void dft2D_opt(unsigned char *in, MyComplex *out, int width, int heig
     out[y * width + x] = { sumReal, sumImag };
 }
 
-__global__ void idft2D_opt(MyComplex *in, unsigned char *out, int width, int height) {
+__global__ void idft_opt(MyComplex *in, unsigned char *out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -224,7 +224,7 @@ int main(int argc, char *argv[]) {
     // start timer
     //cudaEventRecord(start);
 
-    dft2D_opt<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
+    dft_opt<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
 
@@ -263,7 +263,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
 
-    idft2D_opt<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
+    idft_opt<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
