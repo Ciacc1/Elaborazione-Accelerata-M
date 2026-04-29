@@ -8,8 +8,8 @@
 #define TILE_SIZE 16
 
 typedef struct {
-    double real;
-    double imag;
+    float real;
+    float imag;
 } MyComplex;
 
 typedef struct {
