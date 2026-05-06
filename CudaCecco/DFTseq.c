@@ -125,11 +125,14 @@ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
 
-            d = sqrt((x - Xmezzi) * (x - Xmezzi) + (y - Ymezzi) * (y - Ymezzi));
-            
-            if (d > cutoff) {
-                dft[y * width + x].real = 0;
-                dft[y * width + x].imag = 0;
+            float dx = (x < width / 2) ? x : (width - x);
+            float dy = (y < height / 2) ? y : (height - y);
+            float d = sqrtf(dx * dx + dy * dy);
+
+            // EDGE DETECTION (Filtro Passa-Alto)
+            if (d < cutoff) {
+                dft[y * width + x].real = 0.0f;
+                dft[y * width + x].imag = 0.0f;
             }
 
         }
@@ -140,7 +143,7 @@ void filtro(MyComplex *dft, int width, int height, float cutoff) {
 int main() {
     const char *inputFile = "immagini/512.pgm";
     const char *outputFile = "output_sequenziale-512.pgm";
-    float raggioFiltro = 280.0f; // 130 per 256 px    260 512 px
+    float raggioFiltro = 30.0f; 
 
     clock_t start, end;
     double tempo;
