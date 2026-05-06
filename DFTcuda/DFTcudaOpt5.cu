@@ -5,8 +5,8 @@
 
 
 #define PI 3.14159265358979323846
-#define TILE_SIZE 16
-
+#define TILE_W 16
+#define TILE_H 8
 typedef struct {
     float real;
     float imag;
@@ -78,17 +78,12 @@ void writePGM(const char *filename, PGMImage img) {
     fclose(file);
 }
 
-#define TILE_SIZE 16
-
-#define TILE_SIZE 16
-#define PI 3.14159265358979323846f
-
 __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    __shared__ float tile[TILE_SIZE][TILE_SIZE];
+    __shared__ float tile[TILE_H][TILE_W];
 
     float sumReal = 0.0f;
     float sumImag = 0.0f;
@@ -96,8 +91,8 @@ __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int
     float angleX = -2.0f * PI * (float)x / width;
     float angleY = -2.0f * PI * (float)y / height;
 
-    for (int tileV = 0; tileV < height; tileV += TILE_SIZE) {
-        for (int tileU = 0; tileU < width; tileU += TILE_SIZE) {
+    for (int tileV = 0; tileV < height; tileV += TILE_H) {
+        for (int tileU = 0; tileU < width; tileU += TILE_W) {
 
             // Carica tile collaborativamente dalla global memory
             int u = tileU + threadIdx.x;
@@ -109,14 +104,14 @@ __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int
             __syncthreads();
 
             if (x < width && y < height) {
-                for (int dv = 0; dv < TILE_SIZE< height; dv++) {
+                for (int dv = 0; dv < TILE_H; dv++) {
 
                     // sin/cos verticale: costante per tutto il loop su du
                     float cosV, sinV;
                     sincosf(angleY * (tileV + dv), &sinV, &cosV);
-                    
+
                     #pragma unroll 16
-                    for (int du = 0; du < TILE_SIZE < width; du++) {
+                    for (int du = 0; du < TILE_W; du++) {
 
                         float cosU, sinU;
                         sincosf(angleX * (tileU + du), &sinU, &cosU);
@@ -141,6 +136,7 @@ __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int
     if (x < width && y < height)
         out[y * width + x] = { sumReal, sumImag };
 }
+
 
 __global__ void idft_opt(MyComplex *in, unsigned char *out, int width, int height) {
 
@@ -210,20 +206,21 @@ __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    int Xmezzi = width / 2;
-    int Ymezzi = height / 2;
-    float d;
-
     if (x < width && y < height) {
-        d = sqrtf((x - Xmezzi) * (x - Xmezzi) + (y - Ymezzi) * (y - Ymezzi));
+        
+        // Calcoliamo la distanza dall'angolo più vicino (dove stanno le basse frequenze)
+        float dx = (x < width / 2) ? x : (width - x);
+        float dy = (y < height / 2) ? y : (height - y);
+        float d = sqrtf(dx * dx + dy * dy);
 
-        if (d > cutoff) {
-                dft[y * width + x].real = 0;
-                dft[y * width + x].imag = 0;
+        // EDGE DETECTION (Filtro Passa-Alto)
+        if (d < cutoff) {
+            dft[y * width + x].real = 0.0f;
+            dft[y * width + x].imag = 0.0f;
         }
     }
-    
 }
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         printf("Uso: %s <percorso_immagine.pgm> \n", argv[0]);
@@ -231,7 +228,7 @@ int main(int argc, char *argv[]) {
     }
     const char *inputFile =argv[1];
     const char *outputFile = "output_cuda-512.pgm";
-    float raggioFiltro = 280.0f; // 130 per 256 px    260 512 px
+    float raggioFiltro = 30.0f; // 30 per 512 px    60 1024 px
 
     
 /*

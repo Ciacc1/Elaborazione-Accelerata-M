@@ -168,20 +168,21 @@ __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    int Xmezzi = width / 2;
-    int Ymezzi = height / 2;
-    float d;
-
     if (x < width && y < height) {
-        d = sqrtf((x - Xmezzi) * (x - Xmezzi) + (y - Ymezzi) * (y - Ymezzi));
+        
+        // Calcoliamo la distanza dall'angolo più vicino (dove stanno le basse frequenze)
+        float dx = (x < width / 2) ? x : (width - x);
+        float dy = (y < height / 2) ? y : (height - y);
+        float d = sqrtf(dx * dx + dy * dy);
 
-        if (d > cutoff) {
-                dft[y * width + x].real = 0;
-                dft[y * width + x].imag = 0;
+        // EDGE DETECTION (Filtro Passa-Alto)
+        if (d < cutoff) {
+            dft[y * width + x].real = 0.0f;
+            dft[y * width + x].imag = 0.0f;
         }
     }
-    
 }
+
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -190,7 +191,7 @@ int main(int argc, char *argv[]) {
     }
     const char *inputFile =argv[1];
     const char *outputFile = "output_cuda-512.pgm";
-    float raggioFiltro = 260.0f; // 130 per 256 px    260 512 px
+    float raggioFiltro = 30.0f; // 30 per 512 px    60 1024 px
 
     
 /*
