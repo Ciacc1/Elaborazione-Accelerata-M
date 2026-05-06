@@ -105,14 +105,14 @@ __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int
             __syncthreads();
 
             if (x < width && y < height) {
-                for (int dv = 0; dv < TILE_H && (tileV + dv) < height; dv++) {
+                for (int dv = 0; dv < TILE_H; dv++) {
 
                     // sin/cos verticale: costante per tutto il loop su du
                     float cosV, sinV;
                     sincosf(angleY * (tileV + dv), &sinV, &cosV);
 
-                    #pragma unroll 4
-                    for (int du = 0; du < TILE_W && (tileU + du) < width; du++) {
+                    #pragma unroll 4    
+                    for (int du = 0; du < TILE_W; du++) {
 
                         float cosU, sinU;
                         sincosf(angleX * (tileU + du), &sinU, &cosU);
@@ -153,29 +153,63 @@ __global__ void idft_opt(MyComplex *in, unsigned char *out, int width, int heigh
     float angleY = 2.0f * PI * (float)y / height;
 
     for (int v = 0; v < height; v++) {
-
-        // sin/cos verticale — costante per il loop su u
         float cosV, sinV;
         sincosf(angleY * v, &sinV, &cosV);
 
-        #pragma unroll 4
-        for (int u = 0; u < width; u++) {
+        // CONTROLLO SAFE PATH GLOBALE (per immagini con larghezza multipla di 4)
+        if (width % 4 == 0) {
 
-            float cosU, sinU;
-            sincosf(angleX * u, &sinU, &cosU);
+            for (int u = 0; u < width; u += 4) {
+                float cosU0, sinU0, cosU1, sinU1, cosU2, sinU2, cosU3, sinU3;
+                sincosf(angleX * (u + 0), &sinU0, &cosU0);
+                sincosf(angleX * (u + 1), &sinU1, &cosU1);
+                sincosf(angleX * (u + 2), &sinU2, &cosU2);
+                sincosf(angleX * (u + 3), &sinU3, &cosU3);
 
-            // Formula addizione con FMA
-            float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
-            float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
+                MyComplex coeff0 = in[v * width + (u + 0)];
+                MyComplex coeff1 = in[v * width + (u + 1)];
+                MyComplex coeff2 = in[v * width + (u + 2)];
+                MyComplex coeff3 = in[v * width + (u + 3)];
 
-            MyComplex coeff = in[v * width + u];
+                // Step 0
+                float c0 = __fmaf_rn(cosU0, cosV, -sinU0 * sinV);
+                float s0 = __fmaf_rn(sinU0, cosV,  cosU0 * sinV);
+                float st1_0 = __fmaf_rn(-coeff0.imag, s0, sum);
+                sum = __fmaf_rn(coeff0.real, c0, st1_0);
 
-            // IDFT: real*c - imag*s + sum
-            // Decomposto in due FMA concatenate:
-            // step1 = __fmaf_rn(-imag, s, sum)   → -imag*s + sum
-            // step2 = __fmaf_rn( real, c, step1) →  real*c + (-imag*s + sum)
-            float step1 = __fmaf_rn(-coeff.imag, s, sum);
-            sum         = __fmaf_rn( coeff.real,  c, step1);
+                // Step 1
+                float c1 = __fmaf_rn(cosU1, cosV, -sinU1 * sinV);
+                float s1 = __fmaf_rn(sinU1, cosV,  cosU1 * sinV);
+                float st1_1 = __fmaf_rn(-coeff1.imag, s1, sum);
+                sum = __fmaf_rn(coeff1.real, c1, st1_1);
+
+                // Step 2
+                float c2 = __fmaf_rn(cosU2, cosV, -sinU2 * sinV);
+                float s2 = __fmaf_rn(sinU2, cosV,  cosU2 * sinV);
+                float st1_2 = __fmaf_rn(-coeff2.imag, s2, sum);
+                sum = __fmaf_rn(coeff2.real, c2, st1_2);
+
+                // Step 3
+                float c3 = __fmaf_rn(cosU3, cosV, -sinU3 * sinV);
+                float s3 = __fmaf_rn(sinU3, cosV,  cosU3 * sinV);
+                float st1_3 = __fmaf_rn(-coeff3.imag, s3, sum);
+                sum = __fmaf_rn(coeff3.real, c3, st1_3);
+            }
+
+        } else {
+
+            // EDGE PATH (Percorso Lento di Fallback) per immagini con dim "strana" (es. 250 px)
+            for (int u = 0; u < width; u++) {
+                float cosU, sinU;
+                sincosf(angleX * u, &sinU, &cosU);
+
+                float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+                float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
+
+                MyComplex coeff = in[v * width + u];
+                float step1 = __fmaf_rn(-coeff.imag, s, sum);
+                sum = __fmaf_rn( coeff.real,  c, step1);
+            }
         }
     }
 
@@ -235,8 +269,11 @@ int main(int argc, char *argv[]) {
 
     cudaMemcpy(d_in, img.data, img.width * img.height, cudaMemcpyHostToDevice);
 
-    dim3 threadsNum(16, 16);
-    dim3 numBlocchi((img.width + threadsNum.x - 1) / threadsNum.x, (img.height + threadsNum.y - 1) / threadsNum.y);
+    dim3 threadsDFT(16, 8);
+    dim3 threadsFilter(16, 16);
+
+    dim3 blocksDFT((img.width  + threadsDFT.x - 1) / threadsDFT.x, (img.height + threadsDFT.y - 1) / threadsDFT.y);
+    dim3 blocksFilter((img.width  + threadsFilter.x - 1) / threadsFilter.x, (img.height + threadsFilter.y - 1) / threadsFilter.y);
 
     //-------------------------------------- DFT
 
@@ -245,7 +282,7 @@ int main(int argc, char *argv[]) {
     // start timer
     //cudaEventRecord(start);
 
-    dft_opt_shared<<<numBlocchi, threadsNum>>>(d_in, d_dft, img.width, img.height);
+    dft_opt_shared<<<blocksDFT, threadsDFT>>>(d_in, d_dft, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
 
@@ -266,7 +303,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
    
-    filtro<<<numBlocchi, threadsNum>>>(d_dft, img.width, img.height, raggioFiltro);
+    filtro<<<blocksFilter, threadsFilter>>>(d_dft, img.width, img.height, raggioFiltro);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
@@ -284,7 +321,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
 
-    idft_opt<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
+    idft_opt<<<blocksDFT, threadsDFT>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
