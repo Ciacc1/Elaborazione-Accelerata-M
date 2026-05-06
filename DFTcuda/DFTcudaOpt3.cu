@@ -5,7 +5,8 @@
 
 
 #define PI 3.14159265358979323846
-#define TILE_SIZE 16
+#define TILE_W 16
+#define TILE_H 8
 
 typedef struct {
     float real;
@@ -78,17 +79,12 @@ void writePGM(const char *filename, PGMImage img) {
     fclose(file);
 }
 
-#define TILE_SIZE 16
-
-#define TILE_SIZE 16
-#define PI 3.14159265358979323846f
-
 __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    __shared__ float tile[TILE_SIZE][TILE_SIZE];
+    __shared__ float tile[TILE_H][TILE_W];
 
     float sumReal = 0.0f;
     float sumImag = 0.0f;
@@ -96,8 +92,8 @@ __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int
     float angleX = -2.0f * PI * (float)x / width;
     float angleY = -2.0f * PI * (float)y / height;
 
-    for (int tileV = 0; tileV < height; tileV += TILE_SIZE) {
-        for (int tileU = 0; tileU < width; tileU += TILE_SIZE) {
+    for (int tileV = 0; tileV < height; tileV += TILE_H) {
+        for (int tileU = 0; tileU < width; tileU += TILE_W) {
 
             // Carica tile collaborativamente dalla global memory
             int u = tileU + threadIdx.x;
@@ -109,14 +105,14 @@ __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int
             __syncthreads();
 
             if (x < width && y < height) {
-                for (int dv = 0; dv < TILE_SIZE && (tileV + dv) < height; dv++) {
+                for (int dv = 0; dv < TILE_H && (tileV + dv) < height; dv++) {
 
                     // sin/cos verticale: costante per tutto il loop su du
                     float cosV, sinV;
                     sincosf(angleY * (tileV + dv), &sinV, &cosV);
-                    
+
                     #pragma unroll 4
-                    for (int du = 0; du < TILE_SIZE && (tileU + du) < width; du++) {
+                    for (int du = 0; du < TILE_W && (tileU + du) < width; du++) {
 
                         float cosU, sinU;
                         sincosf(angleX * (tileU + du), &sinU, &cosU);
@@ -143,70 +139,50 @@ __global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int
 }
 
 
-__global__ void idft_opt_shared(MyComplex *in, unsigned char *out, int width, int height) {
+
+__global__ void idft_opt(MyComplex *in, unsigned char *out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    // Due array separati per evitare padding della struct
-    __shared__ float tileReal[TILE_SIZE][TILE_SIZE];
-    __shared__ float tileImag[TILE_SIZE][TILE_SIZE];
+    if (x >= width || y >= height) return;
 
     float sum = 0.0f;
 
     float angleX = 2.0f * PI * (float)x / width;
     float angleY = 2.0f * PI * (float)y / height;
 
-    for (int tileV = 0; tileV < height; tileV += TILE_SIZE) {
-        for (int tileU = 0; tileU < width; tileU += TILE_SIZE) {
+    for (int v = 0; v < height; v++) {
 
-            int u = tileU + threadIdx.x;
-            int v = tileV + threadIdx.y;
+        // sin/cos verticale — costante per il loop su u
+        float cosV, sinV;
+        sincosf(angleY * v, &sinV, &cosV);
 
-            if (u < width && v < height) {
-                MyComplex c = in[v * width + u];
-                tileReal[threadIdx.y][threadIdx.x] = c.real;
-                tileImag[threadIdx.y][threadIdx.x] = c.imag;
-            } else {
-                tileReal[threadIdx.y][threadIdx.x] = 0.0f;
-                tileImag[threadIdx.y][threadIdx.x] = 0.0f;
-            }
+        #pragma unroll 4
+        for (int u = 0; u < width; u++) {
 
-            __syncthreads();
+            float cosU, sinU;
+            sincosf(angleX * u, &sinU, &cosU);
 
-            if (x < width && y < height) {
-                for (int dv = 0; dv < TILE_SIZE && (tileV + dv) < height; dv++) {
+            // Formula addizione con FMA
+            float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+            float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
 
-                    // sin/cos verticale — costante per il loop su du
-                    float cosV, sinV;
-                    sincosf(angleY * (tileV + dv), &sinV, &cosV);
-                    
-                    #pragma unroll 4
-                    for (int du = 0; du < TILE_SIZE && (tileU + du) < width; du++) {
+            MyComplex coeff = in[v * width + u];
 
-                        float cosU, sinU;
-                        sincosf(angleX * (tileU + du), &sinU, &cosU);
-
-                        // Formula addizione con FMA
-                        float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
-                        float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
-
-                        // Accumulazione IDFT con due FMA concatenate
-                        float step1 = __fmaf_rn(-tileImag[dv][du], s, sum);
-                        sum         = __fmaf_rn( tileReal[dv][du],  c, step1);
-                    }
-                }
-            }
-
-            __syncthreads();
+            // IDFT: real*c - imag*s + sum
+            // Decomposto in due FMA concatenate:
+            // step1 = __fmaf_rn(-imag, s, sum)   → -imag*s + sum
+            // step2 = __fmaf_rn( real, c, step1) →  real*c + (-imag*s + sum)
+            float step1 = __fmaf_rn(-coeff.imag, s, sum);
+            sum         = __fmaf_rn( coeff.real,  c, step1);
         }
     }
 
-    if (x < width && y < height) {
-        sum /= (float)(width * height);
-        out[y * width + x] = (unsigned char)(sum < 0.0f ? 0 : (sum > 255.0f ? 255 : sum));
-    }
+    sum /= (float)(width * height);
+    out[y * width + x] = (unsigned char)(sum < 0.0f ? 0 : (sum > 255.0f ? 255 : sum));
 }
+
 
 __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     
@@ -235,7 +211,7 @@ int main(int argc, char *argv[]) {
     }
     const char *inputFile =argv[1];
     const char *outputFile = "output_cuda-512.pgm";
-    float raggioFiltro = 260.0f; // 130 per 256 px    260 512 px
+    float raggioFiltro = 280.0f; // 130 per 256 px    260 512 px
 
     
 /*
@@ -308,7 +284,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
 
-    idft_opt_shared<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
+    idft_opt<<<numBlocchi, threadsNum>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
