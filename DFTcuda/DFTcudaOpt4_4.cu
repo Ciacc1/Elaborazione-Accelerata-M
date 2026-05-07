@@ -8,7 +8,7 @@
 #define TILE_W 16
 #define TILE_H 8
 
-typedef __align__(8) struct {
+typedef struct {
     float real;
     float imag;
 } MyComplex;
@@ -79,8 +79,7 @@ void writePGM(const char *filename, PGMImage img) {
     fclose(file);
 }
 
-
-__global__ void dft_opt_L1(const unsigned char* __restrict__ in, MyComplex* __restrict__ out, int width, int height) {
+__global__ void dft_opt_shared(unsigned char *in, MyComplex *out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -89,13 +88,9 @@ __global__ void dft_opt_L1(const unsigned char* __restrict__ in, MyComplex* __re
 
     float sumReal = 0.0f;
     float sumImag = 0.0f;
-    
+
     float angleX = -2.0f * PI * (float)x / width;
     float angleY = -2.0f * PI * (float)y / height;
-
-    // NUOVO 1: Calcoliamo il "passo" di rotazione per l'asse X una sola volta per thread.
-    float stepCosX, stepSinX;
-    sincosf(angleX, &stepSinX, &stepCosX);
 
     for (int tileV = 0; tileV < height; tileV += TILE_H) {
         for (int tileU = 0; tileU < width; tileU += TILE_W) {
@@ -110,41 +105,27 @@ __global__ void dft_opt_L1(const unsigned char* __restrict__ in, MyComplex* __re
             __syncthreads();
 
             if (x < width && y < height) {
-                
-                // NUOVO 2: Calcoliamo il punto di partenza (fase iniziale) per questo specifico Tile orizzontale
-                float startCosU, startSinU;
-                sincosf(angleX * tileU, &startSinU, &startCosU);
-
                 for (int dv = 0; dv < TILE_H; dv++) {
 
                     // sin/cos verticale: costante per tutto il loop su du
                     float cosV, sinV;
                     sincosf(angleY * (tileV + dv), &sinV, &cosV);
 
-                    // Ripristiniamo i fasori all'inizio della riga (du = 0)
-                    float currentCosU = startCosU;
-                    float currentSinU = startSinU;
-
-                    #pragma unroll 16
+                    #pragma unroll 4    
                     for (int du = 0; du < TILE_W; du++) {
 
-                        // NESSUN sincosf QUI DENTRO!
+                        float cosU, sinU;
+                        sincosf(angleX * (tileU + du), &sinU, &cosU);
 
-                        // Formula addizione con FMA usando i fasori correnti
-                        float c = __fmaf_rn(currentCosU, cosV, -currentSinU * sinV);
-                        float s = __fmaf_rn(currentSinU, cosV,  currentCosU * sinV);
+                        // Formula addizione con FMA
+                        float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+                        float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
 
                         float pixel = tile[dv][du];
 
                         // Accumulazione con FMA
                         sumReal = __fmaf_rn(pixel, c, sumReal);
                         sumImag = __fmaf_rn(pixel, s, sumImag);
-
-                        // NUOVO 3: Ruotiamo il fasore per il prossimo step (du+1) con 2 FMA
-                        float nextCosU = __fmaf_rn(currentCosU, stepCosX, -currentSinU * stepSinX);
-                        float nextSinU = __fmaf_rn(currentSinU, stepCosX,  currentCosU * stepSinX);
-                        currentCosU = nextCosU;
-                        currentSinU = nextSinU;
                     }
                 }
             }
@@ -155,11 +136,11 @@ __global__ void dft_opt_L1(const unsigned char* __restrict__ in, MyComplex* __re
 
     if (x < width && y < height)
         out[y * width + x] = { sumReal, sumImag };
-
 }
 
 
-__global__ void idft_opt_L1(const MyComplex* __restrict__ in, unsigned char* __restrict__ out, int width, int height) {
+
+__global__ void idft_opt_shared(MyComplex *in, unsigned char *out, int width, int height) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -172,10 +153,6 @@ __global__ void idft_opt_L1(const MyComplex* __restrict__ in, unsigned char* __r
 
     float angleX = 2.0f * PI * (float)x / width;
     float angleY = 2.0f * PI * (float)y / height;
-
-    // NUOVO 1: Passo di rotazione
-    float stepCosX, stepSinX;
-    sincosf(angleX, &stepSinX, &stepCosX);
 
     for (int tileV = 0; tileV < height; tileV += TILE_H) {
         for (int tileU = 0; tileU < width; tileU += TILE_W) {
@@ -195,37 +172,25 @@ __global__ void idft_opt_L1(const MyComplex* __restrict__ in, unsigned char* __r
             __syncthreads();
 
             if (x < width && y < height) {
-                
-                // NUOVO 2: Punto di partenza per l'asse U
-                float startCosU, startSinU;
-                sincosf(angleX * tileU, &startSinU, &startCosU);
-
                 for (int dv = 0; dv < TILE_H; dv++) {
 
-                    // sin/cos verticale
+                    // sin/cos verticale — costante per il loop su du
                     float cosV, sinV;
                     sincosf(angleY * (tileV + dv), &sinV, &cosV);
                     
-                    // Inizializziamo i fasori orizzontali
-                    float currentCosU = startCosU;
-                    float currentSinU = startSinU;
-
-                    #pragma unroll 16
+                    #pragma unroll 4
                     for (int du = 0; du < TILE_W; du++) {
 
-                        // Formula addizione con FMA
-                        float c = __fmaf_rn(currentCosU, cosV, -currentSinU * sinV);
-                        float s = __fmaf_rn(currentSinU, cosV,  currentCosU * sinV);
+                        float cosU, sinU;
+                        sincosf(angleX * (tileU + du), &sinU, &cosU);
 
-                        // Accumulazione IDFT
+                       // Formula addizione con FMA
+                        float c = __fmaf_rn(cosU, cosV, -sinU * sinV);
+                        float s = __fmaf_rn(sinU, cosV,  cosU * sinV);
+
+                        // Accumulazione IDFT con due FMA concatenate
                         float step1 = __fmaf_rn(-tileImag[dv][du], s, sum);
                         sum         = __fmaf_rn( tileReal[dv][du],  c, step1);
-
-                        // NUOVO 3: Rotazione del fasore
-                        float nextCosU = __fmaf_rn(currentCosU, stepCosX, -currentSinU * stepSinX);
-                        float nextSinU = __fmaf_rn(currentSinU, stepCosX,  currentCosU * stepSinX);
-                        currentCosU = nextCosU;
-                        currentSinU = nextSinU;
                     }
                 }
             }
@@ -239,6 +204,7 @@ __global__ void idft_opt_L1(const MyComplex* __restrict__ in, unsigned char* __r
         out[y * width + x] = (unsigned char)(sum < 0.0f ? 0 : (sum > 255.0f ? 255 : sum));
     }
 }
+
 
 __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
     
@@ -259,7 +225,6 @@ __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
         }
     }
 }
-
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -291,6 +256,7 @@ int main(int argc, char *argv[]) {
     CHECK(cudaMalloc(&d_dft, img.width * img.height * sizeof(MyComplex)));
 
     cudaMemcpy(d_in, img.data, img.width * img.height, cudaMemcpyHostToDevice);
+
     dim3 threadsDFT(16, 8);
     dim3 threadsFilter(16, 16);
 
@@ -303,8 +269,8 @@ int main(int argc, char *argv[]) {
   
     // start timer
     //cudaEventRecord(start);
-    
-    dft_opt_L1<<<blocksDFT, threadsDFT>>>(d_in, d_dft, img.width, img.height);
+
+    dft_opt_shared<<<blocksDFT, threadsDFT>>>(d_in, d_dft, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
 
@@ -343,7 +309,7 @@ int main(int argc, char *argv[]) {
     //reset timer
     //cudaEventRecord(start);
 
-    idft_opt_L1<<<blocksDFT, threadsDFT>>>(d_dft, d_out, img.width, img.height);
+    idft_opt_shared<<<blocksDFT, threadsDFT>>>(d_dft, d_out, img.width, img.height);
     CHECK(cudaDeviceSynchronize());
 
     // stop timer
