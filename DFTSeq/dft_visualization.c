@@ -210,7 +210,7 @@ PGMImage dftToImage(MyComplex *dft, int width, int height) {
 
 
 int main() {
-    const char *inputFile = "immaginiInput/Bologna-256.pgm";
+    const char *inputFile = "512.pgm";
     //const char *outputFile = "output_sequenziale-256.pgm";
     const char *dftImageFile = "output_dft_spectrum-256.pgm";
     const char *dftShiftedImageFile = "output_dft_spectrum_shifted-256.pgm";
