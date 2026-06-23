@@ -1,12 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <cuda_runtime.h>
 #include <dirent.h>
 #include <vector>
-#include <string.h>   
-#include <string>     
-#include <algorithm> 
+#include <string.h>
+#include <string>
+#include <algorithm>
 
 #define PI 3.14159265358979323846
 #define TILE_W 16
@@ -74,7 +76,8 @@ PGMImage readPGM(const char *filename) {
 void writePGM(const char *filename, PGMImage img) {
     FILE *file = fopen(filename, "wb");
     if (!file) {
-        perror("Errore nell'aprire il file per la scrittura");
+        fprintf(stderr, "Errore scrittura: %s\n", filename);
+        perror("Dettaglio");
         exit(1);
     }
 
@@ -266,12 +269,28 @@ __global__ void filtro(MyComplex *dft, int width, int height, float cutoff) {
 
 
 int main(int argc, char *argv[]) {
-    // argv[1] = cartella frames input
-    // argv[2] = cartella output
 
-    // Raccogli lista frame dalla cartella
-    // Su Linux con dirent.h, nessuna dipendenza esterna
+    if (argc < 3) {
+        fprintf(stderr, "Uso: %s <cartella_input_pgm> <cartella_output>\n", argv[0]);
+        return 1;
+    }
+
+    // Crea output dir se non esiste (robusto su FUSE/Drive)
+    {
+        DIR *test = opendir(argv[2]);
+        if (test) { closedir(test); }
+        else if (mkdir(argv[2], 0755) != 0) {
+            fprintf(stderr, "Impossibile creare cartella output: %s\n", argv[2]);
+            perror("mkdir"); return 1;
+        }
+    }
+
+    printf("[1/6] Input:  %s\n", argv[1]); fflush(stdout);
+    printf("[1/6] Output: %s\n", argv[2]); fflush(stdout);
+
+    // Raccogli e ordina i frame PGM
     DIR *dir = opendir(argv[1]);
+    if (!dir) { perror("opendir input"); return 1; }
     struct dirent *entry;
     std::vector<std::string> files;
     while ((entry = readdir(dir)) != NULL) {
@@ -282,21 +301,26 @@ int main(int argc, char *argv[]) {
     closedir(dir);
     std::sort(files.begin(), files.end());
 
-    // Leggi primo frame per dimensioni
+    printf("[2/6] Frame trovati: %d\n", (int)files.size()); fflush(stdout);
+    if (files.empty()) { fprintf(stderr, "Nessun .pgm trovato in %s\n", argv[1]); return 1; }
+
+    // Dimensioni dal primo frame
     PGMImage first = readPGM(files[0].c_str());
     int W = first.width, H = first.height;
     free(first.data);
+    printf("[3/6] Dimensioni: %dx%d\n", W, H); fflush(stdout);
 
-    // --- PINNED MEMORY invece di malloc normale ---
+    // Allocazione CUDA
+    printf("[4/6] Allocazione memoria CUDA...\n"); fflush(stdout);
     unsigned char *h_in, *h_out;
-    CHECK(cudaMallocHost(&h_in,  W * H));  // pinned
-    CHECK(cudaMallocHost(&h_out, W * H));  // pinned
-
+    CHECK(cudaMallocHost(&h_in,  W * H));
+    CHECK(cudaMallocHost(&h_out, W * H));
     unsigned char *d_in, *d_out;
     MyComplex *d_dft;
     CHECK(cudaMalloc(&d_in,  W * H));
     CHECK(cudaMalloc(&d_out, W * H));
     CHECK(cudaMalloc(&d_dft, W * H * sizeof(MyComplex)));
+    printf("[4/6] Memoria allocata OK\n"); fflush(stdout);
 
     dim3 threadsDFT(TILE_W, TILE_H);
     dim3 threadsFilter(16, 16);
@@ -304,34 +328,51 @@ int main(int argc, char *argv[]) {
     dim3 blocksFilter((W+15)/16, (H+15)/16);
     float cutoff = 30.0f;
 
+    // Timer totale
+    cudaEvent_t t_start, t_stop;
+    cudaEventCreate(&t_start);
+    cudaEventCreate(&t_stop);
+    cudaEventRecord(t_start);
+
+    printf("[5/6] Avvio elaborazione %d frame...\n", (int)files.size()); fflush(stdout);
+
     for (int i = 0; i < (int)files.size(); i++) {
 
-        PGMImage img = readPGM(files[i].c_str());
+        // Stampa progresso e tempo stimato ogni frame
+        if (i == 0 || i % 5 == 0) {
+            printf("  Frame %d/%d\n", i + 1, (int)files.size());
+            fflush(stdout);
+        }
 
-        // Copia in pinned buffer
+        PGMImage img = readPGM(files[i].c_str());
         memcpy(h_in, img.data, W * H);
         free(img.data);
 
-        // H→D (più veloce con pinned)
         CHECK(cudaMemcpy(d_in, h_in, W*H, cudaMemcpyHostToDevice));
 
-        // Pipeline invariata
         dft_opt_L1  <<<blocksDFT,    threadsDFT   >>>(d_in, d_dft, W, H);
         filtro       <<<blocksFilter, threadsFilter>>>(d_dft, W, H, cutoff);
         idft_opt_L1 <<<blocksDFT,    threadsDFT   >>>(d_dft, d_out, W, H);
         CHECK(cudaDeviceSynchronize());
 
-        // D→H
         CHECK(cudaMemcpy(h_out, d_out, W*H, cudaMemcpyDeviceToHost));
 
-        // Scrivi output
         char outpath[256];
         snprintf(outpath, sizeof(outpath), "%s/frame_%04d.pgm", argv[2], i);
         PGMImage out_img = {W, H, 255, h_out};
         writePGM(outpath, out_img);
     }
 
-    cudaFreeHost(h_in);
-    cudaFreeHost(h_out);
+    cudaEventRecord(t_stop);
+    cudaEventSynchronize(t_stop);
+    float ms = 0;
+    cudaEventElapsedTime(&ms, t_start, t_stop);
+    printf("[6/6] Completato! Tempo totale: %.2f s (%.2f ms/frame)\n",
+           ms / 1000.0f, ms / files.size());
+    fflush(stdout);
+
+    cudaFreeHost(h_in); cudaFreeHost(h_out);
     cudaFree(d_in); cudaFree(d_out); cudaFree(d_dft);
+    cudaEventDestroy(t_start); cudaEventDestroy(t_stop);
+    return 0;
 }
