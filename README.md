@@ -24,11 +24,3 @@ Il codice segue un percorso di ottimizzazione incrementale analizzato tramite *N
 * **Software:** CUDA Toolkit (compilatore `nvcc`), GCC.
 * **Profilazione:** NVIDIA Nsight Systems e NVIDIA Nsight Compute.
 
-## Come avviare
-*(Puoi personalizzare questa sezione inserendo i comandi esatti di compilazione presenti nella tua repo, ad esempio:)*
-```bash
-# Compilazione di una versione ottimizzata
-nvcc -O3 src/opt_version.cu -o edge_detection_gpu
-
-# Esecuzione
-./edge_detection_gpu input_image.raw output_image.raw
