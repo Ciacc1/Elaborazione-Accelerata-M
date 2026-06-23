@@ -24,3 +24,9 @@ Il codice segue un percorso di ottimizzazione incrementale analizzato tramite *N
 * **Software:** CUDA Toolkit (compilatore `nvcc`), GCC.
 * **Profilazione:** NVIDIA Nsight Systems e NVIDIA Nsight Compute.
 
+## Files
+* 📁 [Implementazione sequenziale](./DFTSeq) — Contiene i file `.c` della prima soluzione sviluppata sequenziale.
+* 📁 [Progetto base](./DFTcuda) — Contiene i file `.cu` (CUDA) e i report delle ottimizzazioni fatte.
+* 📁 [Estensione video](./VideoEdgeDetect) — Contiene i file `.cu` (CUDA) e i report dell'estensione del progetto.
+* 📽️ [Risultato finale mp4](./VideoEdgeDetect/output_edgeopt2.mp4) — Video risultante dal procedimento di edge detection.
+* 📃 [Relazione](./DFTSuImmagini.pdf) — Relazione completa relativa a progetto su immaggini e estensione per video.
